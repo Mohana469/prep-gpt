@@ -403,16 +403,7 @@ def summarize_content(request):
                           handwriting_filename = f"summary_{safe_topic_name}_handwriting.png"
                           handwriting_full_path = os.path.join(settings.MEDIA_ROOT, handwriting_filename)
 
-                          render_success = utils.render_text_with_custom_handwriting(
-                              text_content=generated_summary_text,
-                              output_image_path=handwriting_full_path,
-                              custom_font_path=settings.CUSTOM_HANDWRITING_FONT_PATH,
-                              font_size=35,
-                              text_color=(0, 0, 128),
-                              background_color=(255, 255, 240),
-                              max_width_pixels=700,
-                              padding=50
-                          )
+                          render_success = utils.render_text_pdf_format(generated_summary_text, handwriting_full_path, settings.CUSTOM_HANDWRITING_FONT_PATH)
 
                           if render_success:
                               handwriting_url = f"{settings.MEDIA_URL}{handwriting_filename}"
