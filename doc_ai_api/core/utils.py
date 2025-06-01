@@ -2,6 +2,7 @@ import os
 import traceback
 from PyPDF2 import PdfReader
 from django.conf import settings as config
+import shutil
 
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
@@ -9,6 +10,10 @@ import textwrap
 import json
 from dotenv import load_dotenv  
 from googleapiclient.discovery import build  
+import requests
+import time
+from selenium import webdriver
+from bs4 import BeautifulSoup
 
 
 # Simple cleaning for this specific task(To be impoved upon)
@@ -97,82 +102,83 @@ def convert_pdf_to_text_util(pdf_file):
         print(error_message)
         return f"An error occurred during conversion: {e}", None
 
-
-
-def render_text_with_custom_handwriting(
-    text_content: str,
-    output_image_path: str,
-    custom_font_path: str,
-    font_size: int = 40,
-    text_color: tuple = (50, 50, 50),  
-    background_color: tuple = (255, 255, 255),  
-    line_spacing_factor: float = 1.3, 
-    max_width_pixels: int = 800,  
-    padding: int = 50,  
-):
+def images_to_pdf(image_files, output_pdf):
+    # Open the first image and convert to RGB (required for PDF)
+    first_image = Image.open(image_files[0]).convert('RGB')
     
-    if not os.path.exists(custom_font_path):
-        print(f"Error: Custom font file not found at '{custom_font_path}'.")
-        print("Please ensure CUSTOM_HANDWRITING_FONT_PATH in config.py is correct.")
-        return False
+    # Open the rest of the images and convert to RGB
+    images = [Image.open(img).convert('RGB') for img in image_files[1:]]
+    
+    # Save all images into one PDF file
+    first_image.save(output_pdf, save_all=True, append_images=images, quality=100, optimize=False)
 
-    try:
-        font = ImageFont.truetype(custom_font_path, font_size)
-    except IOError:
-        print(f"Error: Could not load font from '{custom_font_path}'.")
-        print(
-            "Please ensure the font file exists and the path is correct, and it's a valid TTF file."
-        )
-        return False
-    except Exception as e:
-        print(f"An unexpected error occurred loading font: {e}")
-        return False
 
-    avg_char_width_estimate = font_size * 0.55
-    chars_per_line = int(max_width_pixels / avg_char_width_estimate) - 5
+def render_text_pdf_format(text: str, output_path: str, FONT_PATH: str,):
+    # Settings
+    A4_WIDTH, A4_HEIGHT = 794, 1123
+    LINE_SPACING = 46
+    MARGIN = 25
+    FONT_SIZE = 28
+    LINES_PER_PAGE = (A4_HEIGHT - 2 * MARGIN) // LINE_SPACING
 
-    wrapped_lines = []
-    for paragraph in text_content.split("\n"):
-        if paragraph.strip() == "":
-            wrapped_lines.append("")
+    # Input text
+    # Prepare output folder
+    os.makedirs("pages", exist_ok=True)
+
+    # Font
+    font = ImageFont.truetype(FONT_PATH, FONT_SIZE)
+
+    # Wrap and split text
+    # --- Preserve line breaks and wrap long lines ---
+    raw_lines = text.splitlines()
+    lines = []
+    for line in raw_lines:
+        if line.strip() == "":
+            lines.append("")  # keep blank lines
         else:
-            wrapped_lines.extend(
-                textwrap.wrap(paragraph, width=chars_per_line, break_long_words=False)
-            )
+            wrapped = textwrap.wrap(line, width=70)
+            lines.extend(wrapped)
 
-    if not wrapped_lines:
-        print("No text to render for handwriting.")
-        return False
+    pages = []
+    for i in range(0, len(lines), LINES_PER_PAGE):
+        pages.append(lines[i:i + LINES_PER_PAGE])
 
-    line_height = int(font_size * line_spacing_factor)
-    total_text_height = len(wrapped_lines) * line_height
+    # Create pages
+    for i, page_lines in enumerate(pages):
+        img = Image.new("RGB", (A4_WIDTH, A4_HEIGHT), "white")
+        draw = ImageDraw.Draw(img)
 
-    img_width = max_width_pixels + 2 * padding
-    img_height = total_text_height + 2 * padding
+        # Draw notebook lines
+        for y in range(MARGIN, A4_HEIGHT - MARGIN, LINE_SPACING):
+            draw.line((MARGIN, y, A4_WIDTH - MARGIN, y), fill=(200, 230, 255), width=1)
 
-    if img_height < 100:
-        img_height = 100
-    if img_width < 200:
-        img_width = 200
+        # Draw red margin line
+        draw.line((MARGIN, MARGIN, MARGIN, A4_HEIGHT - MARGIN), fill=(255, 100, 100), width=2) #right
+        draw.line((A4_WIDTH - MARGIN, MARGIN, A4_WIDTH - MARGIN, A4_HEIGHT - MARGIN), fill=(255, 100, 100), width=2) #left
 
-    img = Image.new("RGB", (img_width, img_height), color=background_color)
-    draw = ImageDraw.Draw(img)
+        # Write text
+        y = MARGIN
+        for line in page_lines:
+            draw.text((MARGIN+10, y+15), line, font=font, fill=(0, 0, 255))
+            y += LINE_SPACING
 
-    y_offset = padding
-    for line in wrapped_lines:
-        draw.text((padding, y_offset), line, font=font, fill=text_color)
-        y_offset += line_height
+        img.save(f"pages/page_{i+1}.png")
 
-    try:
-        img.save(output_image_path)
-        print(
-            f"Text rendered to image successfully! Output saved to: '{output_image_path}'"
-        )
-        return True
-    except Exception as e:
-        print(f"Error saving image: {e}")
-        return False
+    print(f"{len(pages)} clean handwritten-style A4 pages saved in 'pages/' folder.")
 
+    # Example usage:
+    images_in_folder = os.listdir("pages")
+    image_list = []
+    for i in range(len(images_in_folder)):
+        image_name = f"pages/page_{i+1}.png"
+        image_list.append(image_name)
+
+    images_to_pdf(image_list, output_path)
+    if os.path.exists('pages'):
+        shutil.rmtree('pages')
+        print(f"Deleted folder: pages")
+    else:
+        print("Folder does not exist")
 
 def _google_custom_search_raw(query: str, num_results: int = 5):
     load_dotenv()  
@@ -187,17 +193,34 @@ def _google_custom_search_raw(query: str, num_results: int = 5):
         service = build("customsearch", "v1", developerKey=api_key)
 
         res = service.cse().list(q=query, cx=cse_id, num=num_results).execute()
-
         if "items" in res and res["items"]:
-            formatted_results = []
+            data = {}
             for i, item in enumerate(res["items"]):
                 title = item.get("title", "N/A")
                 link = item.get("link", "N/A")
-                snippet = item.get("snippet", "N/A")
-                formatted_results.append(
-                    f"Title: {title}\nLink: {link}\nSnippet: {snippet}"
-                )
-            return "\n\n---\n\n".join(formatted_results)
+                # Send an HTTP GET request to the URL
+                response = requests.get(link)
+                # Parse the content using BeautifulSoup
+                soup = BeautifulSoup(response.text, 'html.parser')
+                # Extract visible text
+                if len(soup.get_text()) > 700:
+                    text = soup.get_text()
+                else:
+                    #if text is not extractable using requests
+                    driver = webdriver.Chrome()
+                    driver.get(link)
+                    # Wait for JS to load
+                    time.sleep(5)
+                    # Get the page source after JS loads
+                    html = driver.page_source
+                    # Parse with BeautifulSoup
+                    soup = BeautifulSoup(html, 'html.parser')
+                    text = soup.get_text()
+                    driver.quit()
+                data[title] = ' '.join(text.split())
+            # for k, v in data.items():
+            #     print(f"Key: {k}\n Value: {v}\n")
+            return data
         else:
             return "No relevant search results found."
 
@@ -208,4 +231,4 @@ def _google_custom_search_raw(query: str, num_results: int = 5):
 def google_custom_search_tool_wrapper(query: str) -> str:
     return _google_custom_search_raw(
         query, num_results=5
-    )  
+    )
